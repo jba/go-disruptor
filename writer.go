@@ -3,12 +3,29 @@ package disruptor
 import "runtime"
 
 type Writer struct {
-	written  *Cursor
+	written  *Cursor // highest committed sequence number
 	upstream Barrier
-	capacity int64
-	previous int64
-	gate     int64
+	capacity int64 // number of values that can be stored
+	previous int64 // highest sequence number handed out by Reserve
+	gate     int64 // highest sequence number read by all consumers
 }
+
+/*
+Think of the writable slots in the buffer as a sliding window of size capacity on the
+infinite list of sequence numbers.
+
+gate is the number just before the first value in the window. All consumers have read
+values up to and including gate.
+
+The highest value we can give out is gate + capacity.
+
+
+0   1   2   3   4   5   6   7   8   9   10
+            _____________
+gate ---^
+highest reservable -----^
+
+*/
 
 func NewWriter(written *Cursor, upstream Barrier, capacity int64) *Writer {
 	assertPowerOfTwo(capacity)
@@ -29,10 +46,22 @@ func assertPowerOfTwo(value int64) {
 	}
 }
 
+// Reserve allocates count sequence numbers to the caller.
+// It returns the highest allocated value.
+// E.g. after
+//   s := w.Reserve(3)
+// the caller can use sequence numbers s-2, s-1 and s.
+//
+// If count is greater than the capacity of the buffer, this will loop forever.
 func (this *Writer) Reserve(count int64) int64 {
 	this.previous += count
 
+	// Wait until the highest reserved sequence number to be returned (previous) has
+	// a place in the buffer (whose size is capacity). gate is the highest consumed
+	// sequence number.
 	for spin := int64(0); this.previous-this.capacity > this.gate; spin++ {
+		// Occasionally call the scheduler to release the CPU. If SpinMask is 2^n-1,
+		// this will happen every 2^n iterations.
 		if spin&SpinMask == 0 {
 			runtime.Gosched() // LockSupport.parkNanos(1L); http://bit.ly/1xiDINZ
 		}

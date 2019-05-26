@@ -7,8 +7,8 @@ import (
 
 type Reader struct {
 	read     *Cursor
-	written  *Cursor
-	upstream Barrier
+	written  *Cursor // the highest value written (by Writer.Commit)
+	upstream Barrier // for the first consumer group, the same as written
 	consumer Consumer
 	ready    bool
 }
